@@ -17,6 +17,7 @@ import frc.robot.commands.TurnToAngle;
 import frc.robot.commands.TurnToAngleProfiled;
 import frc.robot.subsystems.DriveSubsystem;
 import frc.robot.subsystems.HornSubsystem;
+import frc.robot.subsystems.SlowModeSubsystem;
 import edu.wpi.first.wpilibj2.command.Command;
 import edu.wpi.first.wpilibj2.command.Commands;
 import edu.wpi.first.wpilibj2.command.ConditionalCommand;
@@ -38,10 +39,9 @@ public class RobotContainer {
   private final SlewRateLimiter throttleLimiter = new SlewRateLimiter(2);
   private final SlewRateLimiter rotationLimiter = new SlewRateLimiter(3);
 
-  private boolean sticksPressed = false;
-  private boolean slowMode = false;
   // The driver's controller
   CommandXboxController m_driverController = new CommandXboxController(OIConstants.kDriverControllerPort);
+  private final SlowModeSubsystem slowModeSubsystem = new SlowModeSubsystem(m_driverController, rumblePulse(0.5), m_robotDrive);
 
   //The bot's horn
   HornSubsystem m_HornSubsystem = new HornSubsystem();
@@ -56,16 +56,21 @@ public class RobotContainer {
     // Configure default commands
     // Set the default drive command to split-stick arcade drive    
     m_robotDrive.setDefaultCommand(
-        // A split-stick arcade command, with forward/backward controlled by the left
-        // hand, and turning controlled by the right.
-        new ConditionalCommand(
-          new RunCommand(
-            () ->
-                m_robotDrive.curvatureDrive(
-                  rotationLimiter.calculate(m_robotDrive.squareInput(-m_driverController.getRightX())),
-                  throttleLimiter.calculate(m_robotDrive.squareInput(m_driverController.getLeftY())),
-                  true),
-            m_robotDrive), new InstantCommand(), () -> (!sticksPressed))
+      // A split-stick arcade command, with forward/backward controlled by the left
+      // hand, and turning controlled by the right.
+      new RunCommand(
+        () -> {
+          if (!slowModeSubsystem.sticksPressed) {
+            m_robotDrive.curvatureDrive(
+              rotationLimiter.calculate(m_robotDrive.squareInput(-m_driverController.getRightX())),
+              throttleLimiter.calculate(m_robotDrive.squareInput(m_driverController.getLeftY())),
+              true
+            );
+          } else {
+            m_robotDrive.curvatureDrive(0, 0, false);
+          }
+        }, m_robotDrive
+      )
     );
         
   }
@@ -105,49 +110,33 @@ public class RobotContainer {
                 m_robotDrive));
 */
     // Turn to 90 degrees when the 'X' button is pressed, with a 5 second timeout
-  m_driverController.x()
-        .whileTrue(m_HornSubsystem.continuousHonkHigh());
+    m_driverController.x()
+          .whileTrue(m_HornSubsystem.continuousHonkHigh());
 
     // Turn to -90 degrees with a profile when the Circle button is pressed, with a 5 second timeout
-  m_driverController.b()
-        .whileTrue(m_HornSubsystem.continuousHonkLow());
+    m_driverController.b()
+          .whileTrue(m_HornSubsystem.continuousHonkLow());
 
-  m_driverController.a()
-        .onTrue(new Siren(m_HornSubsystem));
+    m_driverController.a()
+          .onTrue(new Siren(m_HornSubsystem));
 
-  m_driverController.y()
-        .onTrue(new ShaveAndAHaircut(m_HornSubsystem));
+    m_driverController.y()
+          .onTrue(new ShaveAndAHaircut(m_HornSubsystem));
 
+    m_driverController.rightBumper().onTrue(slowModeSubsystem.updateSlowMode());
 
-  m_driverController.leftStick().and(m_driverController.rightStick())
-        .onTrue(new InstantCommand(() -> sticksPressed = true))
-        .onFalse(new InstantCommand(() -> sticksPressed = false));
-
-
-  m_driverController.rightBumper().onTrue(new InstantCommand(() -> swapSlowMode()));
+    m_driverController.leftStick().and(m_driverController.rightStick())
+      .onTrue(slowModeSubsystem.updateSticksPressed(true))
+      .onFalse(slowModeSubsystem.updateSticksPressed(false));
   }
 
   private void setupDashboard(){
     Shuffleboard.getTab("Drive")
      .add("Drive", m_robotDrive);
   }
-
-  private void swapSlowMode() {
-    if (!sticksPressed) slowMode = false;
-    if (m_driverController.getLeftY() == 1 && m_driverController.getRightY() == -1) {
-      slowMode = !slowMode;
-      rumblePulse(.5);
-    }
-    slowMode = false;
-
-    if (slowMode) {
-      m_robotDrive.setMaxOutput(.75);
-    } else {
-      m_robotDrive.setMaxOutput(1);
-    }
-  }
-
+  
   private Command rumblePulse(double durationSeconds){
+    if (durationSeconds == 0.0) durationSeconds = 0.5;
     return Commands.sequence(
       Commands.runOnce(()->m_driverController.setRumble(RumbleType.kBothRumble, 1)),
       Commands.waitSeconds(durationSeconds),
